@@ -14,6 +14,13 @@ import {
 	initializeGpuRenderer,
 	isGpuAvailable,
 } from "@/services/renderer/gpu-renderer";
+import { usePanelStore } from "@/editor/panel-store";
+import { usePreviewStore } from "@/preview/preview-store";
+import { useSoundsStore } from "@/sounds/sounds-store";
+import { useStickersStore } from "@/stickers/stickers-store";
+import { useAssetsPanelStore } from "@/components/editor/panels/assets/assets-panel-store";
+import { usePropertiesStore } from "@/components/editor/panels/properties/stores/properties-store";
+
 
 interface EditorProviderProps {
 	projectId: string;
@@ -150,5 +157,40 @@ function EditorRuntimeBindings() {
 
 	useEditorActions();
 	useKeybindingsListener();
+
+	const panel = usePanelStore();
+	const preview = usePreviewStore();
+	const sounds = useSoundsStore();
+	const stickers = useStickersStore();
+	const assets = useAssetsPanelStore();
+	const properties = usePropertiesStore();
+	const keybindings = useKeybindingsStore();
+	const timeline = useTimelineStore();
+
+	useEffect(() => {
+		const w = window as any;
+		w.__opencut = editor;
+		w.__stores = {
+			panel,
+			preview,
+			sounds,
+			stickers,
+			assets,
+			properties,
+			keybindings,
+			timeline,
+		};
+	}, [
+		editor,
+		panel,
+		preview,
+		sounds,
+		stickers,
+		assets,
+		properties,
+		keybindings,
+		timeline,
+	]);
+
 	return null;
 }
