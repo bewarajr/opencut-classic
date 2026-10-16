@@ -1,5 +1,5 @@
 import type { ShortcutKey } from "@/actions/keybinding";
-import type { TActionWithOptionalArgs } from "./types";
+import type { TActionWithArgs, TActionWithOptionalArgs } from "./types";
 
 export type TActionCategory =
 	| "playback"
@@ -151,6 +151,20 @@ export const ACTIONS = {
 } as const satisfies Record<string, TActionBaseDefinition>;
 
 export type TAction = keyof typeof ACTIONS;
+
+const REQUIRED_ARG_ACTIONS = [
+	"remove-media-asset",
+	"remove-media-assets",
+] as const satisfies readonly TActionWithArgs[];
+const REQUIRED_ARG_ACTION_SET: ReadonlySet<string> = new Set(
+	REQUIRED_ARG_ACTIONS,
+);
+
+export function isActionWithOptionalArgs(
+	value: string,
+): value is TActionWithOptionalArgs {
+	return Object.hasOwn(ACTIONS, value) && !REQUIRED_ARG_ACTION_SET.has(value);
+}
 
 const ACTION_DEFAULT_SHORTCUTS = [
 	["toggle-play", ["space", "k"]],

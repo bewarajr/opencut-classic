@@ -26,3 +26,7 @@ target/
 .cargo-tools/
 
 rust-migration-notes.md
+
+# Local OpenCut MCP lab (patched clone and dependencies)
+.opencut-mcp-lab/
+exports/*.mp4

@@ -83,15 +83,16 @@ export default function TermsPage() {
 			<section className="flex flex-col gap-3">
 				<h2 className="text-2xl font-semibold">Your Content, Your Rights</h2>
 				<p>
-					<strong>You own everything you create.</strong> All editing and
-					processing happens locally on your device. We never see, store, or
-					have access to your files. We make no claims to ownership, licensing,
+					<strong>You own everything you create.</strong> Editing and
+					processing happen locally on your device. If you choose cloud sync,
+					project data and media are stored on the Bewara server so you can use
+					them on other devices. We make no claims to ownership, licensing,
 					or rights over your videos, projects, or any content you create using
 					OpenCut.
 				</p>
 				<ul className="list-disc space-y-2 pl-6">
 					<li>
-						Your content never leaves your device
+						Your content stays local unless you choose cloud sync or create a share link
 					</li>
 					<li>You retain all intellectual property rights to your content</li>
 					<li>You can export and use your content however you choose</li>

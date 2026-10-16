@@ -9,6 +9,7 @@ import { useKeybindingsListener } from "@/actions/use-keybindings";
 import { useKeybindingsStore } from "@/actions/keybindings-store";
 import { useTimelineStore } from "@/timeline/timeline-store";
 import { useEditorActions } from "@/actions/use-editor-actions";
+import { exposeOpenCutMcpBridge } from "@/components/providers/opencut-mcp-bridge";
 import { loadFontAtlas } from "@/fonts/google-fonts";
 import {
 	initializeGpuRenderer,
@@ -132,7 +133,6 @@ function EditorRuntimeBindings() {
 	const rippleEditingEnabled = useTimelineStore(
 		(state) => state.rippleEditingEnabled,
 	);
-
 	useEffect(() => {
 		editor.command.isRippleEnabled = rippleEditingEnabled;
 	}, [editor, rippleEditingEnabled]);
@@ -150,5 +150,8 @@ function EditorRuntimeBindings() {
 
 	useEditorActions();
 	useKeybindingsListener();
+
+	useEffect(() => exposeOpenCutMcpBridge({ editor }), [editor]);
+
 	return null;
 }

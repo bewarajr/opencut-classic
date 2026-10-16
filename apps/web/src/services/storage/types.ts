@@ -20,6 +20,7 @@ export interface MediaAssetData {
 	type: MediaType;
 	size: number;
 	lastModified: number;
+	mimeType?: string;
 	width?: number;
 	height?: number;
 	duration?: number;

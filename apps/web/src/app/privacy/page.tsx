@@ -37,29 +37,28 @@ export default function PrivacyPage() {
 					</AccordionTrigger>
 					<AccordionContent>
 						<h3 className="mb-3 text-lg font-medium">
-							Your content never leaves your device.
+							Your content stays local unless you choose cloud sync.
 						</h3>
 						<ol className="list-decimal space-y-2 pl-6">
 							<li>
-								Basic editing happens locally in your browser - we never see
-								your files
+								Basic editing happens locally. Synced projects and media are stored
+								on the Bewara server for access across devices.
 							</li>
 							<li>
-								AI features like auto captions run locally in your browser
-								too - nothing is uploaded
+								AI features like auto captions run locally in your browser.
 							</li>
 							<li>
-								OpenCut does not currently require an account or login
+								Cloud sync requires an optional email and password account.
 							</li>
-							<li>Project data stays on your device, not our servers</li>
+							<li>Un-synced project data stays on your device</li>
+							<li>Share links are read-only and available to anyone who has the link</li>
 							<li>
 								We use anonymized analytics to improve the app, but no personal video
 								content is tracked
 							</li>
 							<li>You can clear local data from your browser at any time</li>
 							<li>
-								We don&apos;t sell or share your data with anyone (we don&apos;t
-								even have it)
+								We don&apos;t sell project or media data.
 							</li>
 						</ol>
 						<p className="mt-4">
@@ -78,30 +77,29 @@ export default function PrivacyPage() {
 			<section className="flex flex-col gap-3">
 				<h2 className="text-2xl font-semibold">How We Handle Your Content</h2>
 				<p>
-					<strong>
-						All editing and processing happens locally on your device.
-					</strong>{" "}
-					We never upload, store, or have access to your video or audio files.
-					Your content remains completely private and under your control.
-					AI-powered features like auto captions also run in your browser using
-					on-device models - no content ever leaves your device.
+					<strong>Editing happens locally in your browser.</strong>{" "}
+					If you sign in and sync a project, its timeline and media files are
+					uploaded to the Bewara server so you can open them on other devices.
+					Projects stay private to your account unless you create a share link.
+					Anyone with an active read-only share link can view the project and its
+					uploaded media until you revoke that link. AI captions still run locally.
 				</p>
 			</section>
 
 			<section className="flex flex-col gap-3">
 				<h2 className="text-2xl font-semibold">Accounts & Authentication</h2>
 				<p>
-					OpenCut does not currently offer user accounts, login, or Google
-					sign-in.
+					OpenCut offers optional email and password accounts for cloud projects.
 				</p>
 				<p>
-					Because there is no account system today, we do not collect account
-					emails, profile information, or OAuth identity data.
+					Account email and display name are stored to provide sign-in and
+					associate cloud projects with their owner. Passwords are handled by the
+					authentication service and are not stored in plain text.
 				</p>
 				<p>
-					Your projects are never stored on our servers. All project data,
-					including names, thumbnails, and creation dates, is stored locally
-					in your browser using IndexedDB.
+					Projects you do not sync remain in your browser. Synced project data is
+					stored in PostgreSQL and media files are kept in persistent server
+					storage, associated with your account.
 				</p>
 			</section>
 
@@ -130,13 +128,13 @@ export default function PrivacyPage() {
 				<h2 className="text-2xl font-semibold">Local Storage & Cookies</h2>
 				<p>We use browser local storage and IndexedDB to:</p>
 				<ul className="list-disc space-y-2 pl-6">
-					<li>Save your projects locally on your device</li>
+					<li>Cache project data and media locally for editing</li>
 					<li>Remember your editor preferences and settings</li>
 					<li>Store app state needed for the editor to work between sessions</li>
 				</ul>
 				<p>
-					All data stays on your device and can be cleared at any time through
-					your browser settings.
+					Local cached data can be cleared in browser settings. Synced projects
+					can be deleted from your account by deleting the project.
 				</p>
 			</section>
 

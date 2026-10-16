@@ -1,0 +1,7 @@
+tunnel: 478e943b-d6d9-4d87-aad4-9a7fc0a6cf12
+credentials-file: /etc/cloudflared/credentials.json
+
+ingress:
+  - hostname: opencut.bewara.xyz
+    service: http://web:3000
+  - service: http_status:404

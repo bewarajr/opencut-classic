@@ -51,11 +51,19 @@ function normalizeBookmarks({ raw }: { raw: unknown }): Bookmark[] {
 		.filter((b): b is Bookmark => b !== null);
 }
 
+function encodeMediaMetadata({ metadata }: { metadata: MediaAssetData }): string {
+	const bytes = new TextEncoder().encode(JSON.stringify(metadata));
+	let binary = "";
+	for (const byte of bytes) binary += String.fromCharCode(byte);
+	return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+}
+
 class StorageService {
 	private projectsAdapter: IndexedDBAdapter<SerializedProject>;
 	private savedSoundsAdapter: IndexedDBAdapter<SavedSoundsData>;
 	private config: StorageConfig;
 	private migrationsPromise: Promise<void> | null = null;
+	private cloudSyncError: string | null = null;
 
 	constructor() {
 		this.config = {
@@ -132,6 +140,16 @@ class StorageService {
 	}
 
 	async saveProject({ project }: { project: TProject }): Promise<void> {
+		await this.ensureMigrations();
+		const serializedProject = this.serializeProject({ project });
+		await this.projectsAdapter.set({
+			key: project.metadata.id,
+			value: serializedProject,
+		});
+		await this.saveCloudProject({ serializedProject });
+	}
+
+	private serializeProject({ project }: { project: TProject }): SerializedProject {
 		const duration =
 			project.metadata.duration ??
 			getProjectDurationFromScenes({ scenes: project.scenes });
@@ -161,10 +179,132 @@ class StorageService {
 			timelineViewState: project.timelineViewState,
 		};
 
-		await this.projectsAdapter.set({
-			key: project.metadata.id,
-			value: serializedProject,
+		return serializedProject;
+	}
+
+	private async requestCloud({
+		path,
+		init,
+	}: {
+		path: string;
+		init?: RequestInit;
+	}): Promise<Response | null> {
+		try {
+			const response = await fetch(`/api/cloud/${path}`, {
+				credentials: "include",
+				cache: "no-store",
+				...init,
+			});
+			if (response.status === 401) {
+				this.cloudSyncError = null;
+				return null;
+			}
+			if (response.status === 404) return null;
+			if (!response.ok) {
+				const payload = (await response.json().catch(() => null)) as
+					| { error?: string }
+					| null;
+				throw new Error(payload?.error ?? `Cloud request failed (${response.status})`);
+			}
+			this.cloudSyncError = null;
+			return response;
+		} catch (error) {
+			this.cloudSyncError =
+				error instanceof Error ? error.message : "Cloud sync failed";
+			console.error("[storage] Cloud sync failed:", error);
+			return null;
+		}
+	}
+
+	private async saveCloudProject({
+		serializedProject,
+	}: {
+		serializedProject: SerializedProject;
+	}): Promise<void> {
+		await this.requestCloud({
+			path: `projects/${encodeURIComponent(serializedProject.metadata.id)}`,
+			init: {
+				method: "PUT",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(serializedProject),
+			},
 		});
+	}
+
+	async getSerializedProject({ id }: { id: string }): Promise<SerializedProject | null> {
+		await this.ensureMigrations();
+		return this.projectsAdapter.get(id);
+	}
+
+	getCloudSyncError(): string | null {
+		return this.cloudSyncError;
+	}
+
+	async syncLocalProjectsToCloud(): Promise<{ uploaded: number; failed: number }> {
+		const response = await this.requestCloud({ path: "projects" });
+		if (!response) {
+			throw new Error(this.cloudSyncError ?? "Sign in to sync projects to cloud storage");
+		}
+		const payload = (await response.json()) as {
+			projects: Array<{ id: string }>;
+		};
+		const cloudIds = new Set(payload.projects.map((project) => project.id));
+		const localIds = await this.projectsAdapter.list();
+		let uploaded = 0;
+		let failed = 0;
+
+		for (const id of localIds) {
+			const project = await this.projectsAdapter.get(id);
+			if (!project) continue;
+			const isCloudProject = cloudIds.has(id);
+			if (!cloudIds.has(id)) {
+				const saved = await this.requestCloud({
+					path: `projects/${encodeURIComponent(id)}`,
+					init: {
+						method: "PUT",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify(project),
+					},
+				});
+				if (!saved) {
+					failed++;
+					continue;
+				}
+				uploaded++;
+			}
+
+			const { mediaMetadataAdapter, mediaAssetsAdapter } =
+				this.getProjectMediaAdapters({ projectId: id });
+			const mediaIds = await mediaMetadataAdapter.list();
+			const cloudMediaResponse = await this.requestCloud({
+				path: `projects/${encodeURIComponent(id)}/media`,
+			});
+			const cloudMediaPayload = cloudMediaResponse
+				? ((await cloudMediaResponse.json()) as { assets: MediaAssetData[] })
+				: { assets: [] };
+			const cloudMediaIds = new Set(cloudMediaPayload.assets.map((asset) => asset.id));
+			let syncedMedia = false;
+			for (const mediaId of mediaIds) {
+				if (cloudMediaIds.has(mediaId)) continue;
+				const [file, metadata] = await Promise.all([
+					mediaAssetsAdapter.get(mediaId),
+					mediaMetadataAdapter.get(mediaId),
+				]);
+				if (!file || !metadata) {
+					failed++;
+					continue;
+				}
+				const uploadedMedia = await this.uploadCloudMedia({
+					projectId: id,
+					file,
+					metadata,
+				});
+				if (!uploadedMedia) failed++;
+				else syncedMedia = true;
+			}
+			if (isCloudProject && syncedMedia) uploaded++;
+		}
+		return { uploaded, failed };
 	}
 
 	async loadProject({
@@ -174,24 +314,31 @@ class StorageService {
 	}): Promise<{ project: TProject } | null> {
 		await this.ensureMigrations();
 		const serializedProject = await this.projectsAdapter.get(id);
+		const cloudResponse = await this.requestCloud({
+			path: `projects/${encodeURIComponent(id)}`,
+		});
+		const cloudProject = cloudResponse
+			? ((await cloudResponse.json()) as { project?: SerializedProject }).project
+			: null;
+		const projectData = cloudProject ?? serializedProject;
 
-		if (!serializedProject) return null;
+		if (!projectData) return null;
 
 		if (
-			typeof serializedProject !== "object" ||
-			serializedProject === null ||
-			typeof serializedProject.metadata !== "object" ||
-			serializedProject.metadata === null
+			typeof projectData !== "object" ||
+			projectData === null ||
+			typeof projectData.metadata !== "object" ||
+			projectData.metadata === null
 		) {
 			console.warn(
 				"[storage] Skipping malformed project entry (missing metadata):",
-				{ id, entry: serializedProject },
+				{ id, entry: projectData },
 			);
 			return null;
 		}
 
 		const scenes =
-			serializedProject.scenes?.map((scene) => ({
+			projectData.scenes?.map((scene) => ({
 				id: scene.id,
 				name: scene.name,
 				isMain: scene.isMain,
@@ -203,23 +350,26 @@ class StorageService {
 
 		const project: TProject = {
 			metadata: {
-				id: serializedProject.metadata.id,
-				name: serializedProject.metadata.name,
-				thumbnail: serializedProject.metadata.thumbnail,
+				id: projectData.metadata.id,
+				name: projectData.metadata.name,
+				thumbnail: projectData.metadata.thumbnail,
 				duration: roundMediaTime({
 					time:
-						serializedProject.metadata.duration ??
+						projectData.metadata.duration ??
 						getProjectDurationFromScenes({ scenes }),
 				}),
-				createdAt: new Date(serializedProject.metadata.createdAt),
-				updatedAt: new Date(serializedProject.metadata.updatedAt),
+				createdAt: new Date(projectData.metadata.createdAt),
+				updatedAt: new Date(projectData.metadata.updatedAt),
 			},
 			scenes,
-			currentSceneId: serializedProject.currentSceneId || "",
-			settings: serializedProject.settings,
-			version: serializedProject.version,
-			timelineViewState: serializedProject.timelineViewState,
+			currentSceneId: projectData.currentSceneId || "",
+			settings: projectData.settings,
+			version: projectData.version,
+			timelineViewState: projectData.timelineViewState,
 		};
+		if (cloudProject) {
+			await this.projectsAdapter.set({ key: id, value: cloudProject });
+		}
 
 		return { project };
 	}
@@ -275,6 +425,34 @@ class StorageService {
 			});
 		}
 
+		const cloudResponse = await this.requestCloud({ path: "projects" });
+		if (cloudResponse) {
+			const payload = (await cloudResponse.json()) as {
+				projects: Array<{
+					id: string;
+					name: string;
+					thumbnail?: string;
+					duration?: number;
+					createdAt?: string;
+					updatedAt?: string;
+				}>;
+			};
+			const cloudMetadata: TProjectMetadata[] = [];
+			for (const project of payload.projects) {
+				cloudMetadata.push({
+					id: project.id,
+					name: project.name,
+					thumbnail: project.thumbnail,
+					duration: roundMediaTime({ time: project.duration ?? 0 }),
+					createdAt: project.createdAt ? new Date(project.createdAt) : new Date(),
+					updatedAt: project.updatedAt ? new Date(project.updatedAt) : new Date(),
+				});
+			}
+			// Once signed in, the server list is the account's source of truth.
+			// Do not show cached projects that may belong to another account on this browser.
+			metadata.splice(0, metadata.length, ...cloudMetadata);
+		}
+
 		return metadata.sort(
 			(a, b) => b.updatedAt.getTime() - a.updatedAt.getTime(),
 		);
@@ -282,6 +460,10 @@ class StorageService {
 
 	async deleteProject({ id }: { id: string }): Promise<void> {
 		await this.projectsAdapter.remove(id);
+		await this.requestCloud({
+			path: `projects/${encodeURIComponent(id)}`,
+			init: { method: "DELETE" },
+		});
 	}
 
 	async saveMediaAsset({
@@ -300,6 +482,7 @@ class StorageService {
 			type: mediaAsset.type,
 			size: mediaAsset.file.size,
 			lastModified: mediaAsset.file.lastModified,
+			mimeType: mediaAsset.file.type,
 			width: mediaAsset.width,
 			height: mediaAsset.height,
 			duration: mediaAsset.duration,
@@ -315,6 +498,11 @@ class StorageService {
 			await mediaMetadataAdapter.set({
 				key: mediaAsset.id,
 				value: metadata,
+			});
+			await this.uploadCloudMedia({
+				projectId,
+				file: mediaAsset.file,
+				metadata,
 			});
 		} catch (error) {
 			try {
@@ -349,29 +537,33 @@ class StorageService {
 		]);
 
 		if (!file || !metadata) return null;
+		const normalizedFile = new File([file], metadata.name, {
+			type: metadata.mimeType || file.type,
+			lastModified: metadata.lastModified,
+		});
 
 		let url: string;
-		if (metadata.type === "image" && (!file.type || file.type === "")) {
+		if (metadata.type === "image" && (!normalizedFile.type || normalizedFile.type === "")) {
 			try {
-				const text = await file.text();
+				const text = await normalizedFile.text();
 				if (text.trim().startsWith("<svg")) {
 					const svgBlob = new Blob([text], { type: "image/svg+xml" });
 					url = URL.createObjectURL(svgBlob);
 				} else {
-					url = URL.createObjectURL(file);
+					url = URL.createObjectURL(normalizedFile);
 				}
 			} catch {
-				url = URL.createObjectURL(file);
+				url = URL.createObjectURL(normalizedFile);
 			}
 		} else {
-			url = URL.createObjectURL(file);
+			url = URL.createObjectURL(normalizedFile);
 		}
 
 		return {
 			id: metadata.id,
 			name: metadata.name,
 			type: metadata.type,
-			file,
+			file: normalizedFile,
 			url,
 			width: metadata.width,
 			height: metadata.height,
@@ -386,7 +578,7 @@ class StorageService {
 	}: {
 		projectId: string;
 	}): Promise<MediaAsset[]> {
-		const { mediaMetadataAdapter } = this.getProjectMediaAdapters({
+		const { mediaMetadataAdapter, mediaAssetsAdapter } = this.getProjectMediaAdapters({
 			projectId,
 		});
 
@@ -399,8 +591,54 @@ class StorageService {
 				mediaItems.push(item);
 			}
 		}
+		const cloudResponse = await this.requestCloud({
+			path: `projects/${encodeURIComponent(projectId)}/media`,
+		});
+		if (cloudResponse) {
+			const payload = (await cloudResponse.json()) as { assets: MediaAssetData[] };
+			const loadedIds = new Set(mediaItems.map((item) => item.id));
+			for (const metadata of payload.assets) {
+				if (loadedIds.has(metadata.id)) continue;
+				const fileResponse = await this.requestCloud({
+					path: `projects/${encodeURIComponent(projectId)}/media/${encodeURIComponent(metadata.id)}`,
+				});
+				if (!fileResponse) continue;
+				const blob = await fileResponse.blob();
+				const file = new File([blob], metadata.name, {
+					type: metadata.mimeType || blob.type,
+					lastModified: metadata.lastModified,
+				});
+				await mediaAssetsAdapter.set({ key: metadata.id, value: file });
+				await mediaMetadataAdapter.set({ key: metadata.id, value: metadata });
+				const item = await this.loadMediaAsset({ projectId, id: metadata.id });
+				if (item) mediaItems.push(item);
+			}
+		}
 
 		return mediaItems;
+	}
+
+	private async uploadCloudMedia({
+		projectId,
+		file,
+		metadata,
+	}: {
+		projectId: string;
+		file: File;
+		metadata: MediaAssetData;
+	}): Promise<boolean> {
+		const response = await this.requestCloud({
+			path: `projects/${encodeURIComponent(projectId)}/media/${encodeURIComponent(metadata.id)}`,
+			init: {
+				method: "PUT",
+				headers: {
+					"Content-Type": file.type || "application/octet-stream",
+					"x-opencut-media-meta": encodeMediaMetadata({ metadata }),
+				},
+				body: file,
+			},
+		});
+		return response !== null;
 	}
 
 	async deleteMediaAsset({
@@ -417,6 +655,10 @@ class StorageService {
 			mediaAssetsAdapter.remove(id),
 			mediaMetadataAdapter.remove(id),
 		]);
+		await this.requestCloud({
+			path: `projects/${encodeURIComponent(projectId)}/media/${encodeURIComponent(id)}`,
+			init: { method: "DELETE" },
+		});
 	}
 
 	async deleteProjectMedia({

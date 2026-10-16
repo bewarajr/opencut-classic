@@ -15,7 +15,10 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useEditor } from "@/editor/use-editor";
+import { exposeOpenCutMcpBridge } from "@/components/providers/opencut-mcp-bridge";
 import { useProjectsStore } from "./store";
+import { useSession } from "@/auth/client";
+import { storageService } from "@/services/storage/service";
 import type {
 	TProjectMetadata,
 	TProjectSortKey,
@@ -103,6 +106,8 @@ export default function ProjectsPage() {
 		}
 	}, [editor.project]);
 
+	useEffect(() => exposeOpenCutMcpBridge({ editor }), [editor]);
+
 	return (
 		<div className="bg-background min-h-screen">
 			<MigrationDialog />
@@ -184,12 +189,31 @@ function ProjectsHeader() {
 
 				<div className="flex items-center gap-3 md:gap-4">
 					<SearchBar className="hidden md:block" />
+					<CloudAccountStatus />
+					<Button asChild size="sm" variant="outline">
+						<Link href="/account">Account</Link>
+					</Button>
 					<NewProjectButton />
 				</div>
 			</div>
 			<SearchBar className="block md:hidden mb-4" />
 		</header>
 	);
+}
+
+function CloudAccountStatus() {
+	const { data: session, isPending } = useSession();
+	const [syncError, setSyncError] = useState<string | null>(null);
+	useEffect(() => {
+		const updateStatus = () => setSyncError(storageService.getCloudSyncError());
+		updateStatus();
+		const timer = window.setInterval(updateStatus, 1500);
+		return () => window.clearInterval(timer);
+	}, []);
+	if (isPending) return null;
+	if (!session?.user) return <span className="hidden text-xs text-muted-foreground lg:inline">Local only</span>;
+	if (syncError) return <span className="hidden max-w-40 truncate text-xs text-destructive lg:inline" title={syncError}>Cloud sync issue</span>;
+	return <span className="hidden text-xs text-muted-foreground lg:inline">Cloud sync on</span>;
 }
 
 const SORT_LABELS: Record<TProjectSortKey, string> = {
@@ -558,6 +582,32 @@ function ProjectItem({
 	};
 	const handleDeleteClick = () => setIsDeleteDialogOpen(true);
 	const handleInfoClick = () => setIsInfoDialogOpen(true);
+	const handleShare = async () => {
+		try {
+			const response = await fetch(`/api/cloud/projects/${encodeURIComponent(project.id)}/share`, { method: "POST" });
+			const payload = (await response.json()) as { token?: string; error?: string };
+			if (!response.ok || !payload.token) {
+				throw new Error(payload.error ?? "Sign in to create a share link");
+			}
+			const url = `${window.location.origin}/share/${payload.token}`;
+			await navigator.clipboard.writeText(url);
+			toast.success("Read-only project link copied", { description: url });
+		} catch (error) {
+			toast.error(error instanceof Error ? error.message : "Could not create share link", {
+				description: "Sign in to your cloud account, then try again.",
+			});
+		}
+	};
+	const handleRevokeShare = async () => {
+		try {
+			const response = await fetch(`/api/cloud/projects/${encodeURIComponent(project.id)}/share`, { method: "DELETE" });
+			const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+			if (!response.ok) throw new Error(payload?.error ?? "Could not revoke share link");
+			toast.success("Share link revoked");
+		} catch (error) {
+			toast.error(error instanceof Error ? error.message : "Could not revoke share link");
+		}
+	};
 	const handleDeleteConfirm = async () => {
 		await deleteProjects({ editor, ids: [project.id] });
 		setIsDeleteDialogOpen(false);
@@ -677,6 +727,8 @@ function ProjectItem({
 					onDuplicateClick={handleDuplicate}
 					onDeleteClick={handleDeleteClick}
 					onInfoClick={handleInfoClick}
+					onShareClick={handleShare}
+					onShareRevokeClick={handleRevokeShare}
 				/>
 			)}
 		</div>
@@ -718,6 +770,8 @@ function ProjectItem({
 										onDuplicateClick={handleDuplicate}
 										onDeleteClick={handleDeleteClick}
 										onInfoClick={handleInfoClick}
+										onShareClick={handleShare}
+										onShareRevokeClick={handleRevokeShare}
 									/>
 								)}
 							</>
@@ -731,6 +785,8 @@ function ProjectItem({
 					onDuplicateClick={handleDuplicate}
 					onDeleteClick={handleDeleteClick}
 					onInfoClick={handleInfoClick}
+					onShareClick={handleShare}
+					onShareRevokeClick={handleRevokeShare}
 				/>
 			</ContextMenu>
 
@@ -765,11 +821,15 @@ function ProjectContextMenuContent({
 	onDuplicateClick,
 	onDeleteClick,
 	onInfoClick,
+	onShareClick,
+	onShareRevokeClick,
 }: {
 	onRenameClick: () => void;
 	onDuplicateClick: () => void;
 	onDeleteClick: () => void;
 	onInfoClick: () => void;
+	onShareClick: () => void;
+	onShareRevokeClick: () => void;
 }) {
 	return (
 		<ContextMenuContent>
@@ -791,6 +851,13 @@ function ProjectContextMenuContent({
 			>
 				Info
 			</ContextMenuItem>
+			<ContextMenuItem
+				icon={<HugeiconsIcon icon={Copy01Icon} />}
+				onClick={onShareClick}
+			>
+				Copy share link
+			</ContextMenuItem>
+			<ContextMenuItem onClick={onShareRevokeClick}>Revoke share link</ContextMenuItem>
 			<ContextMenuSeparator />
 			<ContextMenuItem
 				variant="destructive"
@@ -811,6 +878,8 @@ function ProjectMenu({
 	onDuplicateClick,
 	onDeleteClick,
 	onInfoClick,
+	onShareClick,
+	onShareRevokeClick,
 }: {
 	isOpen: boolean;
 	onOpenChange: (open: boolean) => void;
@@ -819,6 +888,8 @@ function ProjectMenu({
 	onDuplicateClick: () => void;
 	onDeleteClick: () => void;
 	onInfoClick: () => void;
+	onShareClick: () => void;
+	onShareRevokeClick: () => void;
 }) {
 	const handleMenuClick = ({
 		event,
@@ -858,6 +929,16 @@ function ProjectMenu({
 
 	const handleInfoClick = () => {
 		onInfoClick();
+		onOpenChange(false);
+	};
+
+	const handleShareClick = () => {
+		void onShareClick();
+		onOpenChange(false);
+	};
+
+	const handleShareRevokeClick = () => {
+		void onShareRevokeClick();
 		onOpenChange(false);
 	};
 
@@ -907,6 +988,11 @@ function ProjectMenu({
 					<HugeiconsIcon icon={InformationCircleIcon} />
 					Info
 				</DropdownMenuItem>
+				<DropdownMenuItem onClick={handleShareClick}>
+					<HugeiconsIcon icon={Copy01Icon} />
+					Copy share link
+				</DropdownMenuItem>
+				<DropdownMenuItem onClick={handleShareRevokeClick}>Revoke share link</DropdownMenuItem>
 				<DropdownMenuItem variant="destructive" onClick={handleDeleteClick}>
 					<HugeiconsIcon icon={Delete02Icon} />
 					Delete
